@@ -1,0 +1,6 @@
+{
+  "name": "AI ARCHITECT",
+  "description": "AI-Based Automated 2D & 3D House Blueprint Generator with AI Suggestions and Explainable AI",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,1001 @@
+563:function buildLayoutCandidate(
+564-  land: LandDetails,
+565-  facingDirection: FacingDirection,
+566-  classified: ClassifiedSpace[],
+567-  attachedToMap: Map<string, ClassifiedSpace>,
+568-  balconyMap: Map<string, ClassifiedSpace>,
+569-  config: StrategyConfig
+570-): LayoutCandidate {
+571-  const placements: RoomPlacement[] = [];
+572-  const reasonsMap: LayoutCandidate['reasonsMap'] = {};
+573-
+574-  let entrance: EntranceDetails;
+575-  let frontWall: 'north' | 'south' | 'east' | 'west';
+576-
+577-  switch (facingDirection) {
+578-    case 'North':
+579-      frontWall = 'north';
+580-      entrance = { wall: 'north', x: land.length / 2 - 2, y: 0, width: 4, description: 'North Main Entrance' };
+581-      break;
+582-    case 'South':
+583-      frontWall = 'south';
+584-      entrance = { wall: 'south', x: land.length / 2 - 2, y: land.breadth - 0.5, width: 4, description: 'South Main Entrance' };
+585-      break;
+586-    case 'East':
+587-      frontWall = 'east';
+588-      entrance = { wall: 'east', x: land.length - 0.5, y: land.breadth / 2 - 2, width: 4, description: 'East Main Entrance' };
+589-      break;
+590-    case 'West':
+591-      frontWall = 'west';
+592-      entrance = { wall: 'west', x: 0, y: land.breadth / 2 - 2, width: 4, description: 'West Main Entrance' };
+593-      break;
+594-  }
+595-
+596-  const isPolygonPlot =
+597-    land.plotType === 'polygon' &&
+598-    !!land.polygonPoints &&
+599-    land.polygonPoints.length >= 3;
+600-
+601-  const defaultSetbacks = getDefaultSetbacks(land.totalArea || land.length * land.breadth);
+602-  const effectiveSetback = config.setback > 0 ? config.setback : defaultSetbacks.left;
+603-
+604-  const buildablePolygon = isPolygonPlot
+605-    ? computeInnerBuildablePolygon(land.polygonPoints!, effectiveSetback)
+606-    : null;
+607-
+608-  let frontSetback = defaultSetbacks.front;
+609-  let rearSetback = defaultSetbacks.rear;
+610-  let sideLeftSetback = defaultSetbacks.left;
+611-  let sideRightSetback = defaultSetbacks.right;
+612-
+613-  if (config.setback > 0) {
+614-    const ratio = config.setback / defaultSetbacks.left;
+615-    frontSetback = Math.max(2.5, defaultSetbacks.front * ratio);
+616-    rearSetback = Math.max(2.0, defaultSetbacks.rear * ratio);
+617-    sideLeftSetback = config.setback;
+618-    sideRightSetback = config.setback;
+619-  }
+620-
+621-  let minX = sideLeftSetback;
+622-  let maxX = land.length - sideRightSetback;
+623-  let minY = rearSetback;
+624-  let maxY = land.breadth - frontSetback;
+625-
+626-  if (facingDirection === 'North') {
+627-    minY = frontSetback;
+628-    maxY = land.breadth - rearSetback;
+629-  } else if (facingDirection === 'South') {
+630-    minY = rearSetback;
+631-    maxY = land.breadth - frontSetback;
+632-  } else if (facingDirection === 'East') {
+633-    minX = sideLeftSetback;
+634-    maxX = land.length - frontSetback;
+635-    minY = sideRightSetback;
+636-    maxY = land.breadth - rearSetback;
+637-  } else if (facingDirection === 'West') {
+638-    minX = frontSetback;
+639-    maxX = land.length - sideRightSetback;
+640-    minY = sideLeftSetback;
+641-    maxY = land.breadth - rearSetback;
+642-  }
+643-
+644-  const setbackBounds = { minX, maxX, minY, maxY };
+645-  const occupiedBoxes: { x: number; y: number; w: number; h: number; id: string }[] = [];
+646-
+647-  const addReason = (
+648-    id: string,
+649-    constraint: string,
+650-    pref: string,
+651-    rejLoc: string,
+652-    rejReason: string
+653-  ) => {
+654-    if (!reasonsMap[id]) {
+655-      reasonsMap[id] = {
+656-        constraints: [],
+657-        preferences: [],
+658-        rejected: [],
+659-        tradeoffs: [],
+660-      };
+661-    }
+662-    reasonsMap[id].constraints.push(constraint);
+663-    reasonsMap[id].preferences.push(pref);
+664-    reasonsMap[id].rejected.push({ location: rejLoc, reason: rejReason });
+665-  };
+666-
+667-  const isSlotFree = (x: number, y: number, w: number, h: number, isOutdoor: boolean = false) => {
+668-    if (x < -0.05 || y < -0.05 || x + w > land.length + 0.05 || y + h > land.breadth + 0.05) {
+669-      return false;
+670-    }
+671-
+672-    if (isPolygonPlot && land.polygonPoints && land.polygonPoints.length >= 3) {
+673-      const roomBox = { x, y, width: w, height: h };
+674-      const targetPoly = !isOutdoor && buildablePolygon ? buildablePolygon : land.polygonPoints;
+675-      if (!isRoomInsidePolygon(roomBox, targetPoly)) {
+676-        return false;
+677-      }
+678-    } else {
+679-      if (!isOutdoor) {
+680-        if (
+681-          x < setbackBounds.minX - 0.05 ||
+682-          x + w > setbackBounds.maxX + 0.05 ||
+683-          y < setbackBounds.minY - 0.05 ||
+684-          y + h > setbackBounds.maxY + 0.05
+685-        ) {
+686-          return false;
+687-        }
+688-      }
+689-    }
+690-
+691-    for (const box of occupiedBoxes) {
+692-      if (
+693-        x < box.x + box.w - 0.05 &&
+694-        x + w > box.x + 0.05 &&
+695-        y < box.y + box.h - 0.05 &&
+696-        y + h > box.y + 0.05
+697-      ) {
+698-        return false;
+699-      }
+700-    }
+701-    return true;
+702-  };
+703-
+704-  const placeRoomBox = (
+705-    c: ClassifiedSpace,
+706-    x: number,
+707-    y: number,
+708-    w: number,
+709-    h: number
+710-  ): RoomPlacement => {
+711-    let rx = Math.round(x * 10) / 10;
+712-    let ry = Math.round(y * 10) / 10;
+713-    let rw = Math.round(w * 10) / 10;
+714-    let rh = Math.round(h * 10) / 10;
+715-
+716-    // Dynamic Wall Alignment Snap during placement
+717-    if (occupiedBoxes.length > 0) {
+718-      const snapTol = 1.5;
+719-      let testRx = rx;
+720-      let testRy = ry;
+721-
+722-      for (const box of occupiedBoxes) {
+723-        if (Math.abs(testRx - box.x) < snapTol) testRx = box.x;
+724-        else if (Math.abs(testRx + rw - (box.x + box.w)) < snapTol) testRx = box.x + box.w - rw;
+725-        else if (Math.abs(testRx - (box.x + box.w)) < snapTol) testRx = box.x + box.w;
+726-        else if (Math.abs(testRx + rw - box.x) < snapTol) testRx = box.x - rw;
+727-
+728-        if (Math.abs(testRy - box.y) < snapTol) testRy = box.y;
+729-        else if (Math.abs(testRy + rh - (box.y + box.h)) < snapTol) testRy = box.y + box.h - rh;
+730-        else if (Math.abs(testRy - (box.y + box.h)) < snapTol) testRy = box.y + box.h;
+731-        else if (Math.abs(testRy + rh - box.y) < snapTol) testRy = box.y - rh;
+732-      }
+733-
+734-      if (isSlotFree(testRx, testRy, rw, rh, c.functionalZone === 'Outdoor')) {
+735-        rx = testRx;
+736-        ry = testRy;
+737-      }
+738-    }
+739-
+740-    occupiedBoxes.push({ x: rx, y: ry, w: rw, h: rh, id: c.req.id });
+741-
+742-    return {
+743-      id: c.req.id,
+744-      name: c.req.name,
+745-      category: c.req.category,
+746-      x: rx,
+747-      y: ry,
+748-      width: rw,
+749-      height: rh,
+750-      area: calculateRoomArea(rw, rh),
+751-      zone: c.zone,
+752-      doors: [],
+753-      windows: [],
+754-      color: getRoomColor(c.req.name),
+755-      adjacentRoomIds: [],
+756-    };
+757-  };
+758-
+759-  const findBestAdjacentIndoorSlot = (
+760-    c: ClassifiedSpace,
+761-    targetZone: 'social' | 'service' | 'private',
+762-    preferredAnchors: RoomPlacement[] = []
+763-  ): { x: number; y: number; w: number; h: number } | null => {
+764-    const req = c.req;
+765-    const [scL, scB] = getScaledRoomDimensions(c.type, config.scaleRatio, req.length, req.breadth);
+766-    const dims = [
+767-      [scL, scB],
+768-      [scB, scL],
+769-    ];
+770-
+771-    const indoorPlacements = placements.filter((p) => {
+772-      const cls = classified.find((cl) => cl.req.id === p.id);
+773-      return cls?.functionalZone !== 'Outdoor';
+774-    });
+775-
+776-    const anchorList = preferredAnchors.length > 0 ? preferredAnchors : indoorPlacements;
+777-    if (anchorList.length === 0) return null;
+778-
+779-    interface CandidateSlot {
+780-      x: number;
+781-      y: number;
+782-      w: number;
+783-      h: number;
+784-      score: number;
+785-    }
+786-    const candidates: CandidateSlot[] = [];
+787-
+788-    for (const anchor of anchorList) {
+789-      for (const [w, h] of dims) {
+790-        const testSlots: { x: number; y: number }[] = [
+791-          { x: anchor.x, y: anchor.y + anchor.height },
+792-          { x: anchor.x + anchor.width - w, y: anchor.y + anchor.height },
+793-          { x: anchor.x, y: anchor.y - h },
+794-          { x: anchor.x + anchor.width - w, y: anchor.y - h },
+795-          { x: anchor.x + anchor.width, y: anchor.y },
+796-          { x: anchor.x + anchor.width, y: anchor.y + anchor.height - h },
+797-          { x: anchor.x - w, y: anchor.y },
+798-          { x: anchor.x - w, y: anchor.y + anchor.height - h },
+799-        ];
+800-
+801-        for (const ind of indoorPlacements) {
+802-          testSlots.push({ x: ind.x, y: anchor.y + anchor.height });
+803-          testSlots.push({ x: ind.x + ind.width - w, y: anchor.y + anchor.height });
+804-          testSlots.push({ x: ind.x, y: anchor.y - h });
+805-          testSlots.push({ x: ind.x + ind.width - w, y: anchor.y - h });
+806-          testSlots.push({ x: anchor.x + anchor.width, y: ind.y });
+807-          testSlots.push({ x: anchor.x + anchor.width, y: ind.y + ind.height - h });
+808-          testSlots.push({ x: anchor.x - w, y: ind.y });
+809-          testSlots.push({ x: anchor.x - w, y: ind.y + ind.height - h });
+810-        }
+811-
+812-        for (const slot of testSlots) {
+813-          const sx = Math.round(slot.x * 10) / 10;
+814-          const sy = Math.round(slot.y * 10) / 10;
+815-
+816-          if (isSlotFree(sx, sy, w, h)) {
+817-            let s = 300;
+818-
+819-            let totalShared = 0;
+820-            for (const ind of indoorPlacements) {
+821-              const shared = getSharedWall({ x: sx, y: sy, width: w, height: h }, ind);
+822-              if (shared) {
+823-                totalShared += shared.overlapLength;
+824-                s += shared.overlapLength * 35;
+825-              }
+826-            }
+827-
+828-            if (totalShared < 1.0) continue;
+829-
+830-            for (const ind of indoorPlacements) {
+831-              if (Math.abs(sx - ind.x) < 0.2 || Math.abs(sx + w - (ind.x + ind.width)) < 0.2) s += 40;
+832-              if (Math.abs(sy - ind.y) < 0.2 || Math.abs(sy + h - (ind.y + ind.height)) < 0.2) s += 40;
+833-            }
+834-
+835-            if (targetZone === 'private') {
+836-              if (facingDirection === 'North') s += sy * 4;
+837-              else if (facingDirection === 'South') s += (land.breadth - (sy + h)) * 4;
+838-              else if (facingDirection === 'East') s += (land.length - (sx + w)) * 4;
+839-              else s += sx * 4;
+840-            } else if (targetZone === 'social') {
+841-              if (facingDirection === 'North') s -= sy * 4;
+842-              else if (facingDirection === 'South') s -= (land.breadth - (sy + h)) * 4;
+843-              else if (facingDirection === 'East') s -= (land.length - (sx + w)) * 4;
+844-              else s -= sx * 4;
+845-            }
+846-
+847-            s += getRoomAspectRatioScore(w, h);
+848-            candidates.push({ x: sx, y: sy, w, h, score: s });
+849-          }
+850-        }
+851-      }
+852-    }
+853-
+854-    if (candidates.length === 0) return null;
+855-    candidates.sort((a, b) => b.score - a.score);
+856-    return candidates[0];
+857-  };
+858-
+859-  // STEP 1: PUBLIC ZONE GENERATION (Living Hall, Dining, Pooja)
+860-  const hallSpace = classified.find((c) => c.type === 'hall');
+861-  let hallPlacement: RoomPlacement | null = null;
+862-
+863-  if (hallSpace) {
+864-    const req = hallSpace.req;
+865-    const [hw, hh] = getScaledRoomDimensions(hallSpace.type, config.scaleRatio, req.length, req.breadth);
+866-    let fitted = false;
+867-
+868-    const bEnv = isPolygonPlot && buildablePolygon ? {
+869-      minX: Math.min(...buildablePolygon.map((p) => p.x)),
+870-      maxX: Math.max(...buildablePolygon.map((p) => p.x)),
+871-      minY: Math.min(...buildablePolygon.map((p) => p.y)),
+872-      maxY: Math.max(...buildablePolygon.map((p) => p.y)),
+873-    } : setbackBounds;
+874-
+875-    for (const [w, h] of [
+876-      [hw, hh],
+877-      [hh, hw],
+878-    ]) {
+879-      const candidatesX: number[] = [];
+880-      const candidatesY: number[] = [];
+881-
+882-      if (facingDirection === 'North') {
+883-        const frontY = bEnv.minY;
+884-        const leftX = bEnv.minX;
+885-        const rightX = Math.max(bEnv.minX, bEnv.maxX - w);
+886-        const centerX = Math.max(bEnv.minX, (bEnv.minX + bEnv.maxX - w) / 2);
+887-
+888-        if (config.hallOffset === 'left') candidatesX.push(leftX, centerX, rightX);
+889-        else if (config.hallOffset === 'right') candidatesX.push(rightX, centerX, leftX);
+890-        else candidatesX.push(centerX, leftX, rightX);
+891-
+892-        for (const testX of candidatesX) {
+893-          if (isSlotFree(testX, frontY, w, h)) {
+894-            hallPlacement = placeRoomBox(hallSpace, testX, frontY, w, h);
+895-            placements.push(hallPlacement);
+896-            fitted = true;
+897-            break;
+898-          }
+899-        }
+900-      } else if (facingDirection === 'South') {
+901-        const frontY = Math.max(bEnv.minY, bEnv.maxY - h);
+902-        const leftX = bEnv.minX;
+903-        const rightX = Math.max(bEnv.minX, bEnv.maxX - w);
+904-        const centerX = Math.max(bEnv.minX, (bEnv.minX + bEnv.maxX - w) / 2);
+905-
+906-        if (config.hallOffset === 'left') candidatesX.push(leftX, centerX, rightX);
+907-        else if (config.hallOffset === 'right') candidatesX.push(rightX, centerX, leftX);
+908-        else candidatesX.push(centerX, leftX, rightX);
+909-
+910-        for (const testX of candidatesX) {
+911-          if (isSlotFree(testX, frontY, w, h)) {
+912-            hallPlacement = placeRoomBox(hallSpace, testX, frontY, w, h);
+913-            placements.push(hallPlacement);
+914-            fitted = true;
+915-            break;
+916-          }
+917-        }
+918-      } else if (facingDirection === 'East') {
+919-        const frontX = Math.max(bEnv.minX, bEnv.maxX - w);
+920-        const topY = bEnv.minY;
+921-        const bottomY = Math.max(bEnv.minY, bEnv.maxY - h);
+922-        const centerY = Math.max(bEnv.minY, (bEnv.minY + bEnv.maxY - h) / 2);
+923-
+924-        if (config.hallOffset === 'left') candidatesY.push(topY, centerY, bottomY);
+925-        else if (config.hallOffset === 'right') candidatesY.push(bottomY, centerY, topY);
+926-        else candidatesY.push(centerY, topY, bottomY);
+927-
+928-        for (const testY of candidatesY) {
+929-          if (isSlotFree(frontX, testY, w, h)) {
+930-            hallPlacement = placeRoomBox(hallSpace, frontX, testY, w, h);
+931-            placements.push(hallPlacement);
+932-            fitted = true;
+933-            break;
+934-          }
+935-        }
+936-      } else {
+937-        const frontX = bEnv.minX;
+938-        const topY = bEnv.minY;
+939-        const bottomY = Math.max(bEnv.minY, bEnv.maxY - h);
+940-        const centerY = Math.max(bEnv.minY, (bEnv.minY + bEnv.maxY - h) / 2);
+941-
+942-        if (config.hallOffset === 'left') candidatesY.push(topY, centerY, bottomY);
+943-        else if (config.hallOffset === 'right') candidatesY.push(bottomY, centerY, topY);
+944-        else candidatesY.push(centerY, topY, bottomY);
+945-
+946-        for (const testY of candidatesY) {
+947-          if (isSlotFree(frontX, testY, w, h)) {
+948-            hallPlacement = placeRoomBox(hallSpace, frontX, testY, w, h);
+949-            placements.push(hallPlacement);
+950-            fitted = true;
+951-            break;
+952-          }
+953-        }
+954-      }
+955-
+956-      if (fitted) break;
+957-    }
+958-
+959-    if (!fitted) {
+960-      // Do not force hall placement to prevent overlaps
+961-    }
+962-
+963-    addReason(
+964-      req.id,
+965-      `Anchored directly on ${facingDirection} front road facade for grand welcoming entrance`,
+966-      'Public welcoming foyer and primary living zone',
+967-      'Rear private quadrant',
+968-      'Forced guests to walk through private family bedrooms'
+969-    );
+970-  }
+971-
+972-  // Update entrance coordinates aligned with Hall
+973-  if (hallPlacement) {
+974-    if (facingDirection === 'North') {
+975-      entrance = {
+976-        wall: 'north',
+977-        x: hallPlacement.x + hallPlacement.width / 2 - 2,
+978-        y: hallPlacement.y,
+979-        width: 4,
+980-        description: 'North Main Entrance into Living Hall',
+981-      };
+982-    } else if (facingDirection === 'South') {
+983-      entrance = {
+984-        wall: 'south',
+985-        x: hallPlacement.x + hallPlacement.width / 2 - 2,
+986-        y: hallPlacement.y + hallPlacement.height,
+987-        width: 4,
+988-        description: 'South Main Entrance into Living Hall',
+989-      };
+990-    } else if (facingDirection === 'East') {
+991-      entrance = {
+992-        wall: 'east',
+993-        x: hallPlacement.x + hallPlacement.width,
+994-        y: hallPlacement.y + hallPlacement.height / 2 - 2,
+995-        width: 4,
+996-        description: 'East Main Entrance into Living Hall',
+997-      };
+998-    } else {
+999-      entrance = {
+1000-        wall: 'west',
+1001-        x: hallPlacement.x,
+1002-        y: hallPlacement.y + hallPlacement.height / 2 - 2,
+1003-        width: 4,
+1004-        description: 'West Main Entrance into Living Hall',
+1005-      };
+1006-    }
+1007-  }
+1008-
+1009-  // Place Dining directly adjacent to Living Room
+1010-  const diningSpace = classified.find((c) => c.type === 'dining');
+1011-  let diningPlacement: RoomPlacement | null = null;
+1012-  if (diningSpace && hallPlacement) {
+1013-    const adjDining = findBestAdjacentIndoorSlot(diningSpace, 'social', [hallPlacement]);
+1014-    if (adjDining) {
+1015-      diningPlacement = placeRoomBox(diningSpace, adjDining.x, adjDining.y, adjDining.w, adjDining.h);
+1016-      placements.push(diningPlacement);
+1017-      addReason(
+1018-        diningSpace.req.id,
+1019-        'Directly connected to Living Room for seamless social circulation and entertaining',
+1020-        'Living-Dining visual continuity and open floor flow',
+1021-        'Isolated rear corner',
+1022-        'Disconnected dining room requiring long travel distance from living room'
+1023-      );
+1024-    }
+1025-  }
+1026-
+1027-  // Place Pooja / Prayer Room
+1028-  const prayerSpace = classified.find((c) => c.type === 'prayer');
+1029-  if (prayerSpace) {
+1030-    const anchors = [hallPlacement, diningPlacement].filter(Boolean) as RoomPlacement[];
+1031-    const adjPooja = findBestAdjacentIndoorSlot(prayerSpace, 'social', anchors);
+1032-    if (adjPooja) {
+1033-      placements.push(placeRoomBox(prayerSpace, adjPooja.x, adjPooja.y, adjPooja.w, adjPooja.h));
+1034-      addReason(
+1035-        prayerSpace.req.id,
+1036-        'Positioned adjacent to Living/Dining in sacred zone for respectful family access',
+1037-        'Pooja room common living space adjacency',
+1038-        'Behind private utility or toilet',
+1039-        'Hidden behind service zone or exposed to laundry noise'
+1040-      );
+1041-    }
+1042-  }
+1043-
+1044-  // STEP 2: SERVICE & SEMI-PRIVATE ZONE (Kitchen, Utility, Store, Staircase, Common Bath)
+1045-  const kitchenSpace = classified.find((c) => c.type === 'kitchen');
+1046-  let kitchenPlacement: RoomPlacement | null = null;
+1047-
+1048-  if (kitchenSpace) {
+1049-    const kitchenAnchors = [diningPlacement, hallPlacement].filter(Boolean) as RoomPlacement[];
+1050-    const adjKitchen = findBestAdjacentIndoorSlot(kitchenSpace, 'service', kitchenAnchors);
+1051-    if (adjKitchen) {
+1052-      kitchenPlacement = placeRoomBox(kitchenSpace, adjKitchen.x, adjKitchen.y, adjKitchen.w, adjKitchen.h);
+1053-      placements.push(kitchenPlacement);
+1054-      addReason(
+1055-        kitchenSpace.req.id,
+1056-        'Directly adjacent to Dining for immediate food serving flow and service efficiency',
+1057-        'Kitchen-Dining service axis',
+1058-        'Opposite corner of house',
+1059-        'Required carrying hot food across living room and guest seating'
+1060-      );
+1061-    }
+1062-  }
+1063-
+1064-  // Utility Room
+1065-  const utilitySpace = classified.find((c) => c.type === 'utility');
+1066-  if (utilitySpace && kitchenPlacement) {
+1067-    const adjUtility = findBestAdjacentIndoorSlot(utilitySpace, 'service', [kitchenPlacement]);
+1068-    if (adjUtility) {
+1069-      placements.push(placeRoomBox(utilitySpace, adjUtility.x, adjUtility.y, adjUtility.w, adjUtility.h));
+1070-      addReason(
+1071-        utilitySpace.req.id,
+1072-        'Positioned directly behind/beside Kitchen for discrete laundry & wash workflow',
+1073-        'Service zone utility cluster',
+1074-        'Front living room',
+1075-        'Exposed utility laundry clutter to main house guests'
+1076-      );
+1077-    }
+1078-  }
+1079-
+1080-  // Store Room
+1081-  const storeSpace = classified.find((c) => c.type === 'store');
+1082-  if (storeSpace && kitchenPlacement) {
+1083-    const adjStore = findBestAdjacentIndoorSlot(storeSpace, 'service', [kitchenPlacement]);
+1084-    if (adjStore) {
+1085-      placements.push(placeRoomBox(storeSpace, adjStore.x, adjStore.y, adjStore.w, adjStore.h));
+1086-      addReason(
+1087-        storeSpace.req.id,
+1088-        'Directly attached to Kitchen for dry goods storage and pantry access',
+1089-        'Kitchen-Pantry immediate proximity',
+1090-        'Entrance hallway',
+1091-        'Disconnected pantry far from cooking counters'
+1092-      );
+1093-    }
+1094-  }
+1095-
+1096-  // Staircase
+1097-  const stairSpace = classified.find((c) => c.type === 'staircase');
+1098-  if (stairSpace && !placements.some((p) => p.id === stairSpace.req.id)) {
+1099-    const adjStair = findBestAdjacentIndoorSlot(stairSpace, 'service');
+1100-    if (adjStair) {
+1101-      placements.push(placeRoomBox(stairSpace, adjStair.x, adjStair.y, adjStair.w, adjStair.h));
+1102-      addReason(
+1103-        stairSpace.req.id,
+1104-        'Positioned along structural side boundary for safe, efficient vertical circulation',
+1105-        'Side wall structural staircase spine',
+1106-        'Center of living room',
+1107-        'Obstructed central floor plan sightlines'
+1108-      );
+1109-    }
+1110-  }
+1111-
+1112-  // Common Bathroom
+1113-  const commonBath = classified.find((c) => c.type === 'common_bathroom');
+1114-  if (commonBath && !placements.some((p) => p.id === commonBath.req.id)) {
+1115-    const adjCommonBath = findBestAdjacentIndoorSlot(commonBath, 'service');
+1116-    if (adjCommonBath) {
+1117-      placements.push(placeRoomBox(commonBath, adjCommonBath.x, adjCommonBath.y, adjCommonBath.w, adjCommonBath.h));
+1118-      addReason(
+1119-        commonBath.req.id,
+1120-        'Positioned along central common passage for shared household accessibility with visual screening from dining',
+1121-        'Central passage access and discreet entrance orientation',
+1122-        'Directly facing dining table',
+1123-        'Uncomfortable sightline from dining area into bathroom'
+1124-      );
+1125-    }
+1126-  }
+1127-
+1128-  // STEP 3: PRIVATE ZONE (Master Bedroom, Bedrooms, Attached Bathrooms, Study)
+1129-  const masterBed = classified.find((c) => c.type === 'master_bedroom');
+1130-  const otherBeds = classified.filter((c) => c.type === 'bedroom' || c.type === 'guest');
+1131-  const allBeds = masterBed ? [masterBed, ...otherBeds] : otherBeds;
+1132-
+1133-  for (const bed of allBeds) {
+1134-    if (placements.some((p) => p.id === bed.req.id)) continue;
+1135-
+1136-    const adjBed = findBestAdjacentIndoorSlot(bed, 'private');
+1137-    let bedPlacement: RoomPlacement;
+1138-
+1139-    if (adjBed) {
+1140-      bedPlacement = placeRoomBox(bed, adjBed.x, adjBed.y, adjBed.w, adjBed.h);
+1141-      placements.push(bedPlacement);
+1142-    } else {
+1143-      // Do not force placement to avoid overlaps
+1144-    }
+1145-
+1146-    addReason(
+1147-      bed.req.id,
+1148-      'Located in quiet rear private zone away from front entrance and social activity',
+1149-      'Rear private sleeping sanctuary and acoustic buffering',
+1150-      'Front entrance foyer',
+1151-      'Exposed private bedroom to front door traffic and living room noise'
+1152-    );
+1153-
+1154-    // Attached Bathroom pairing
+1155-    const attachedBathEntry = Array.from(attachedToMap.entries()).find(
+1156-      ([_, targetBed]) => targetBed.req.id === bed.req.id
+1157-    );
+1158-
+1159-    if (attachedBathEntry) {
+1160-      const bathSpace = classified.find((c) => c.req.id === attachedBathEntry[0]);
+1161-      if (bathSpace && !placements.some((p) => p.id === bathSpace.req.id)) {
+1162-        const adjBath = findBestAdjacentIndoorSlot(bathSpace, 'private', [bedPlacement]);
+1163-        if (adjBath) {
+1164-          placements.push(placeRoomBox(bathSpace, adjBath.x, adjBath.y, adjBath.w, adjBath.h));
+1165-          addReason(
+1166-            bathSpace.req.id,
+1167-            `Directly attached and sharing a continuous single partition wall with ${bed.req.name}`,
+1168-            'Private attached en-suite bathroom relationship',
+1169-            'Across common hallway',
+1170-            'Forced occupant to walk into public hallway to reach bathroom'
+1171-          );
+1172-        }
+1173-      }
+1174-    }
+1175-  }
+1176-
+1177-  // Study Room
+1178-  const studySpace = classified.find((c) => c.type === 'study' || c.type === 'office');
+1179-  if (studySpace && !placements.some((p) => p.id === studySpace.req.id)) {
+1180-    const adjStudy = findBestAdjacentIndoorSlot(studySpace, 'private');
+1181-    if (adjStudy) {
+1182-      placements.push(placeRoomBox(studySpace, adjStudy.x, adjStudy.y, adjStudy.w, adjStudy.h));
+1183-      addReason(
+1184-        studySpace.req.id,
+1185-        'Positioned in quiet zone away from noisy entrance for focused productive work',
+1186-        'Quiet study and home office acoustic isolation',
+1187-        'Beside main entrance',
+1188-        'Exposed study space to constant front door disturbance'
+1189-      );
+1190-    }
+1191-  }
+1192-
+1193-  // STEP 4: OUTDOOR ZONE (Parking, Garden, Balcony)
+1194-  const parkingSpace = classified.find((c) => c.type === 'parking');
+1195-  const gardenSpace = classified.find((c) => c.type === 'garden');
+1196-
+1197-  if (parkingSpace && !placements.some((p) => p.id === parkingSpace.req.id)) {
+1198-    const req = parkingSpace.req;
+1199-    const [pw, ph] = getScaledRoomDimensions(parkingSpace.type, config.scaleRatio, req.length, req.breadth);
+1200-    let placedPark = false;
+1201-    const parkCandidates: Array<{ x: number; y: number; w: number; h: number }> = [];
+1202-
+1203-    for (const [w, h] of [
+1204-      [pw, ph],
+1205-      [ph, pw],
+1206-    ]) {
+1207-      if (facingDirection === 'North') {
+1208-        const py = 0;
+1209-        const xValues = config.parkingCorner.includes('right')
+1210-          ? [land.length - w, land.length - w - 2, 0, (land.length - w) / 2]
+1211-          : [0, 2, land.length - w, (land.length - w) / 2];
+1212-        for (const px of xValues) {
+1213-          if (isSlotFree(px, py, w, h, true)) parkCandidates.push({ x: px, y: py, w, h });
+1214-        }
+1215-      } else if (facingDirection === 'South') {
+1216-        const py = Math.max(0, land.breadth - h);
+1217-        const xValues = config.parkingCorner.includes('right')
+1218-          ? [land.length - w, land.length - w - 2, 0, (land.length - w) / 2]
+1219-          : [0, 2, land.length - w, (land.length - w) / 2];
+1220-        for (const px of xValues) {
+1221-          if (isSlotFree(px, py, w, h, true)) parkCandidates.push({ x: px, y: py, w, h });
+1222-        }
+1223-      } else if (facingDirection === 'East') {
+1224-        const px = Math.max(0, land.length - w);
+1225-        const yValues = config.parkingCorner.includes('right')
+1226-          ? [land.breadth - h, land.breadth - h - 2, 0, (land.breadth - h) / 2]
+1227-          : [0, 2, land.breadth - h, (land.breadth - h) / 2];
+1228-        for (const py of yValues) {
+1229-          if (isSlotFree(px, py, w, h, true)) parkCandidates.push({ x: px, y: py, w, h });
+1230-        }
+1231-      } else {
+1232-        const px = 0;
+1233-        const yValues = config.parkingCorner.includes('right')
+1234-          ? [land.breadth - h, land.breadth - h - 2, 0, (land.breadth - h) / 2]
+1235-          : [0, 2, land.breadth - h, (land.breadth - h) / 2];
+1236-        for (const py of yValues) {
+1237-          if (isSlotFree(px, py, w, h, true)) parkCandidates.push({ x: px, y: py, w, h });
+1238-        }
+1239-      }
+1240-    }
+1241-
+1242-    if (parkCandidates.length > 0) {
+1243-      const best = parkCandidates[0];
+1244-      placements.push(placeRoomBox(parkingSpace, best.x, best.y, best.w, best.h));
+1245-      placedPark = true;
+1246-    }
+1247-
+1248-    if (placedPark) {
+1249-      addReason(
+1250-        req.id,
+1251-        `Positioned on ${facingDirection} front road boundary for direct vehicle driveway access`,
+1252-        'Front outdoor vehicle circulation',
+1253-        'Rear landlocked quadrant',
+1254-        'Trapped without street vehicle driveway access'
+1255-      );
+1256-    }
+1257-  }
+1258-
+1259-  // Garden
+1260-  if (gardenSpace && !placements.some((p) => p.id === gardenSpace.req.id)) {
+1261-    const req = gardenSpace.req;
+1262-    const [gw, gh] = getScaledRoomDimensions(gardenSpace.type, config.scaleRatio, req.length, req.breadth);
+1263-    let placedGarden = false;
+1264-    const gardenCandidates: Array<{ x: number; y: number; w: number; h: number }> = [];
+1265-
+1266-    for (const [w, h] of [
+1267-      [gw, gh],
+1268-      [gh, gw],
+1269-    ]) {
+1270-      if (config.gardenCorner.includes('rear')) {
+1271-        const gy = facingDirection === 'North' ? Math.max(0, land.breadth - h) : 0;
+1272-        const gx = config.gardenCorner.includes('right') ? Math.max(0, land.length - w) : 0;
+1273-        if (isSlotFree(gx, gy, w, h, true)) gardenCandidates.push({ x: gx, y: gy, w, h });
+1274-      } else {
+1275-        const xValues = [0, Math.max(0, land.length - w), Math.max(0, (land.length - w) / 2)];
+1276-        const yValues = [0, Math.max(0, land.breadth - h), Math.max(0, (land.breadth - h) / 2)];
+1277-        for (const gy of yValues) {
+1278-          for (const gx of xValues) {
+1279-            if (isSlotFree(gx, gy, w, h, true)) gardenCandidates.push({ x: gx, y: gy, w, h });
+1280-          }
+1281-        }
+1282-      }
+1283-    }
+1284-
+1285-    if (gardenCandidates.length > 0) {
+1286-      const best = gardenCandidates[0];
+1287-      placements.push(placeRoomBox(gardenSpace, best.x, best.y, best.w, best.h));
+1288-      placedGarden = true;
+1289-    }
+1290-
+1291-    if (placedGarden) {
+1292-      addReason(
+1293-        req.id,
+1294-        'Positioned along exterior boundary for open light and landscape design',
+1295-        'Outdoor green landscaping zone',
+1296-        'Central interior core',
+1297-        'Surrounded completely by walls without open sky and sunlight'
+1298-      );
+1299-    }
+1300-  }
+1301-
+1302-  // Balconies
+1303-  const balconySpaces = classified.filter((c) => c.type === 'balcony');
+1304-  for (const balcSpace of balconySpaces) {
+1305-    if (placements.some((p) => p.id === balcSpace.req.id)) continue;
+1306-    const parent = balconyMap.get(balcSpace.req.id);
+1307-    const parentP = parent ? placements.find((p) => p.id === parent.req.id) : null;
+1308-    const [bw, bh] = getScaledRoomDimensions(balcSpace.type, config.scaleRatio, balcSpace.req.length, balcSpace.req.breadth);
+1309-    let balcFitted = false;
+1310-
+1311-    if (parentP) {
+1312-      const bSlots = [
+1313-        { x: parentP.x, y: parentP.y - bh, w: parentP.width, h: bh },
+1314-        { x: parentP.x, y: parentP.y + parentP.height, w: parentP.width, h: bh },
+1315-        { x: parentP.x + parentP.width, y: parentP.y, w: bw, h: parentP.height },
+1316-        { x: parentP.x - bw, y: parentP.y, w: bw, h: parentP.height },
+1317-      ];
+1318-
+1319-      for (const slot of bSlots) {
+1320-        if (isSlotFree(slot.x, slot.y, slot.w, slot.h, true)) {
+1321-          const balcP = placeRoomBox(balcSpace, slot.x, slot.y, slot.w, slot.h);
+1322-          placements.push(balcP);
+1323-          addReason(
+1324-            balcSpace.req.id,
+1325-            `Attached directly to ${parent.req.name} along exterior facade for fresh air and scenic view`,
+1326-            'Exterior balcony extension',
+1327-            'Interior hallway',
+1328-            'Blocked from exterior fresh air and natural sunlight'
+1329-          );
+1330-          balcFitted = true;
+1331-          break;
+1332-        }
+1333-      }
+1334-    }
+1335-
+1336-    if (!balcFitted) {
+1337-      const adjBalc = findBestAdjacentIndoorSlot(balcSpace, 'social', parentP ? [parentP] : []);
+1338-      if (adjBalc) {
+1339-        placements.push(placeRoomBox(balcSpace, adjBalc.x, adjBalc.y, adjBalc.w, adjBalc.h));
+1340-        balcFitted = true;
+1341-      }
+1342-    }
+1343-  }
+1344-
+1345-  // Any remaining unplaced spaces
+1346-  const unplaced = classified.filter((c) => !placements.some((p) => p.id === c.req.id));
+1347-  for (const u of unplaced) {
+1348-    const adj = findBestAdjacentIndoorSlot(u, u.functionalZone === 'Private' ? 'private' : 'social');
+1349-    if (adj) {
+1350-      placements.push(placeRoomBox(u, adj.x, adj.y, adj.w, adj.h));
+1351-    }
+1352-  }
+1353-
+1354-  // Corridors & Openings
+1355-  const corridors: { x: number; y: number; width: number; height: number }[] = [];
+1356-  const indoorRooms = placements.filter((p) => {
+1357-    const c = classified.find((cl) => cl.req.id === p.id);
+1358-    return c?.functionalZone !== 'Outdoor';
+1359-  });
+1360-
+1361-  if (indoorRooms.length > 2) {
+1362-    const minIX = Math.min(...indoorRooms.map((r) => r.x));
+1363-    const maxIX = Math.max(...indoorRooms.map((r) => r.x + r.width));
+1364-    const minIY = Math.min(...indoorRooms.map((r) => r.y));
+1365-    const maxIY = Math.max(...indoorRooms.map((r) => r.y + r.height));
+1366-    const midY = (minIY + maxIY) / 2;
+1367-    const midX = (minIX + maxIX) / 2;
+1368-
+1369-    if (facingDirection === 'North' || facingDirection === 'South') {
+1370-      if (maxIY - minIY > 26) {
+1371-        const cW = Math.max(4.0, maxIX - minIX - 4);
+1372-        const cH = 3.5;
+1373-        const cX = minIX + 2;
+1374-        const cY = Math.max(minIY + 8, Math.min(maxIY - 8, midY - 1.75));
+1375-        corridors.push({ x: cX, y: cY, width: cW, height: cH });
+1376-      }
+1377-    } else {
+1378-      if (maxIX - minIX > 26) {
+1379-        const cW = 3.5;
+1380-        const cH = Math.max(4.0, maxIY - minIY - 4);
+1381-        const cX = Math.max(minIX + 8, Math.min(maxIX - 8, midX - 1.75));
+1382-        const cY = minIY + 2;
+1383-        corridors.push({ x: cX, y: cY, width: cW, height: cH });
+1384-      }
+1385-    }
+1386-  }
+1387-
+1388-  // Generate Doors and Windows
+1389-  generateArchitecturalOpenings(
+1390-    placements,
+1391-    land,
+1392-    facingDirection,
+1393-    classified,
+1394-    attachedToMap,
+1395-    balconyMap
+1396-  );
+1397-
+1398-  // Check overlaps & bounds
+1399-  let hasOverlap = false;
+1400-  let outOfBounds = false;
+1401-
+1402-  for (let i = 0; i < placements.length; i++) {
+1403-    const p1 = placements[i];
+1404-    const isOutdoor = p1.zone === 'Outdoor Zone';
+1405-
+1406-    if (p1.x < -0.05 || p1.y < -0.05 || p1.x + p1.width > land.length + 0.05 || p1.y + p1.height > land.breadth + 0.05) {
+1407-      outOfBounds = true;
+1408-    }
+1409-    if (land.plotType === 'polygon' && land.polygonPoints && land.polygonPoints.length >= 3) {
+1410-      const targetPoly = !isOutdoor && buildablePolygon ? buildablePolygon : land.polygonPoints;
+1411-      if (!isRoomInsidePolygon(p1, targetPoly)) {
+1412-        outOfBounds = true;
+1413-      }
+1414-    }
+1415-    for (let j = i + 1; j < placements.length; j++) {
+1416-      const p2 = placements[j];
+1417-      if (
+1418-        p1.x < p2.x + p2.width - 0.05 &&
+1419-        p1.x + p1.width > p2.x + 0.05 &&
+1420-        p1.y < p2.y + p2.height - 0.05 &&
+1421-        p1.y + p1.height > p2.y + 0.05
+1422-      ) {
+1423-        hasOverlap = true;
+1424-      }
+1425-    }
+1426-  }
+1427-
+1428-  // Evaluate candidate layout
+1429-  const scoreBreakdown = evaluateCandidateLayout(
+1430-    placements,
+1431-    land,
+1432-    facingDirection,
+1433-    classified,
+1434-    attachedToMap,
+1435-    balconyMap,
+1436-    hasOverlap,
+1437-    outOfBounds
+1438-  );
+1439-
+1440-  const sitePlan = buildSitePlanRecord(
+1441-    land,
+1442-    facingDirection,
+1443-    frontWall,
+1444-    setbackBounds,
+1445-    frontSetback,
+1446-    rearSetback,
+1447-    sideLeftSetback,
+1448-    sideRightSetback,
+1449-    hallPlacement,
+1450-    placements
+1451-  );
+1452-
+1453-  return {
+1454-    layoutName: config.name,
+1455-    strategyTitle: config.title,
+1456-    placements,
+1457-    corridors,
+1458-    entrance,
+1459-    sitePlan,
+1460-    score: scoreBreakdown.overallScore,
+1461-    scoreBreakdown,
+1462-    wallContinuityScore: scoreBreakdown.wallAlignment,
+1463-    hasOverlap,
+1464-    outOfBounds,
+1465-    reasonsMap,
+1466-  };
+1467-}
+1468-
+1469-/**
+1470- * Deterministic Layout Collision Auto-Resolution & Quality Enforcement Pass
+1471- */
+1472-function resolveCollisionsAndValidate(
+1473-  initialCandidateOrStrat: LayoutCandidate | StrategyConfig,
+1474-  land: LandDetails,
+1475-  facingDirection: FacingDirection,
+1476-  classified: ClassifiedSpace[],
+1477-  attachedToMap: Map<string, ClassifiedSpace>,
+1478-  balconyMap: Map<string, ClassifiedSpace>
+1479-): LayoutCandidate {
+1480-  if ('placements' in initialCandidateOrStrat) {
+1481-    const cand = initialCandidateOrStrat as LayoutCandidate;
+1482-    if (!cand.hasOverlap && !cand.outOfBounds) {
+1483-      return cand;
+1484-    }
+1485-  }
+1486-
+1487-  const isPolygonPlot =
+1488-    land.plotType === 'polygon' &&
+1489-    !!land.polygonPoints &&
+1490-    land.polygonPoints.length >= 3;
+1491-
+1492-  const defaultSetbacks = getDefaultSetbacks(land.totalArea || land.length * land.breadth);
+1493-  const setback = isPolygonPlot ? 2.5 : Math.max(1.8, defaultSetbacks.left * 0.8);
+1494-  const buildablePolygon = isPolygonPlot
+1495-    ? computeInnerBuildablePolygon(land.polygonPoints!, setback)
+1496-    : null;
+1497-
+1498-  let minX = setback;
+1499-  let maxX = land.length - setback;
+1500-  let minY = setback;
+1501-  let maxY = land.breadth - setback;
+1502-
+1503-  if (facingDirection === 'North') {
+1504-    minY = Math.max(2.5, defaultSetbacks.front * 0.8);
+1505-    maxY = land.breadth - Math.max(1.8, defaultSetbacks.rear * 0.8);
+1506-  } else if (facingDirection === 'South') {
+1507-    minY = Math.max(1.8, defaultSetbacks.rear * 0.8);
+1508-    maxY = land.breadth - Math.max(2.5, defaultSetbacks.front * 0.8);
+1509-  } else if (facingDirection === 'East') {
+1510-    maxX = land.length - Math.max(2.5, defaultSetbacks.front * 0.8);
+1511-    minX = Math.max(1.8, defaultSetbacks.rear * 0.8);
+1512-  } else if (facingDirection === 'West') {
+1513-    minX = Math.max(2.5, defaultSetbacks.front * 0.8);
+1514-    maxX = land.length - Math.max(1.8, defaultSetbacks.rear * 0.8);
+1515-  }
+1516-
+1517-  const resolvedPlacements: RoomPlacement[] = [];
+1518-  const occupiedBoxes: { x: number; y: number; w: number; h: number; id: string }[] = [];
+1519-  const reasonsMap: LayoutCandidate['reasonsMap'] = {};
+1520-
+1521-  const isBoxFree = (x: number, y: number, w: number, h: number, isOutdoor: boolean = false) => {
+1522-    if (x < -0.05 || y < -0.05 || x + w > land.length + 0.05 || y + h > land.breadth + 0.05) {
+1523-      return false;
+1524-    }
+1525-
+1526-    if (isPolygonPlot && land.polygonPoints && land.polygonPoints.length >= 3) {
+1527-      const roomBox = { x, y, width: w, height: h };
+1528-      const targetPoly = !isOutdoor && buildablePolygon ? buildablePolygon : land.polygonPoints;
+1529-      if (!isRoomInsidePolygon(roomBox, targetPoly)) {
+1530-        return false;
+1531-      }
+1532-    } else {
+1533-      if (!isOutdoor) {
+1534-        if (x < minX - 0.05 || x + w > maxX + 0.05 || y < minY - 0.05 || y + h > maxY + 0.05) {
+1535-          return false;
+1536-        }
+1537-      }
+1538-    }
+1539-
+1540-    for (const b of occupiedBoxes) {
+1541-      const overlapX = Math.min(x + w, b.x + b.w) - Math.max(x, b.x);
+1542-      const overlapY = Math.min(y + h, b.y + b.h) - Math.max(y, b.y);
+1543-      if (overlapX > 0.05 && overlapY > 0.05) {
+1544-        return false;
+1545-      }
+1546-    }
+1547-    return true;
+1548-  };
+1549-
+1550-  const publicSpaces = classified.filter((s) => s.functionalZone === 'Public');
+1551-  const semiPrivateSpaces = classified.filter((s) => s.functionalZone === 'Semi-Private' || s.functionalZone === 'Service');
+1552-  const privateSpaces = classified.filter((s) => s.functionalZone === 'Private');
+1553-  const outdoorSpaces = classified.filter((s) => s.functionalZone === 'Outdoor');
+1554-
+1555-  const hallSpace = publicSpaces.find((s) => s.type === 'hall') || publicSpaces[0] || classified[0];
+1556-  const hallW = hallSpace.req.length;
+1557-  const hallH = hallSpace.req.breadth;
+1558-
+1559-  let hallX = minX;
+1560-  let hallY = minY;
+1561-
+1562-  if (facingDirection === 'North') {
+1563-    hallX = (minX + maxX - hallW) / 2;
