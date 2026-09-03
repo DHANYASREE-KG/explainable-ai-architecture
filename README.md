@@ -1117,10 +1117,3 @@ An appropriate open-source license should be added before public distribution ba
 If you find this project useful, consider giving the repository a ⭐ on GitHub.
 
 ---
-
-## 🔗 GitHub Repository
-
-[https://github.com/DHANYASREE-KG](https://github.com/DHANYASREE-KG)
-
-```
-```
